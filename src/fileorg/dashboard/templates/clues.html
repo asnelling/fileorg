@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}File Detail{% endblock %}
+{% block content %}
+<p><a href="/files">&larr; Files</a></p>
+<h1>{{ file.path.split('/')[-1] }}</h1>
+
+<section class="file-meta">
+  <table class="meta-table">
+    <tr><th>Path</th><td>{{ file.path }}</td></tr>
+    <tr><th>SHA-256</th><td class="mono">{{ file.sha256[:16] }}...</td></tr>
+    <tr><th>Size</th><td>{{ file.size_bytes }} bytes</td></tr>
+    <tr><th>MIME type</th><td>{{ file.mime_type or '—' }}</td></tr>
+    <tr><th>Status</th><td><span class="badge badge-{{ 'green' if file.scan_status=='categorized' else ('red' if file.scan_status=='error' else 'gray') }}">{{ file.scan_status }}</span></td></tr>
+    {% if file.error_message %}<tr><th>Error</th><td class="error-msg">{{ file.error_message }}</td></tr>{% endif %}
+  </table>
+</section>
+
+{% if categories %}
+<section>
+  <h2>Categories</h2>
+  {% for cat in categories %}
+  <div class="cat-row">
+    <a href="/categories/{{ cat.name }}">{{ cat.name }}</a>
+    <div class="progress" title="{{ (cat.confidence * 100)|round(0) }}%">
+      <div class="progress-fill" style="width:{{ (cat.confidence * 100)|round(0) }}%"></div>
+    </div>
+    <span class="conf-label">{{ (cat.confidence * 100)|round(1) }}%</span>
+    <small class="muted">via {{ cat.model_used }}</small>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section>
+  <h2>Clues</h2>
+  {% for plugin_name, plugin_clues in clues_by_plugin.items() %}
+  <details open>
+    <summary><strong>{{ plugin_name }}</strong> <span class="count">{{ plugin_clues|length }}</span></summary>
+    <table>
+      <thead><tr><th>Key</th><th>Value</th><th>Confidence</th></tr></thead>
+      <tbody>
+        {% for clue in plugin_clues %}
+        <tr>
+          <td class="mono">{{ clue.key }}</td>
+          <td>{{ clue.value }}</td>
+          <td>
+            <div class="progress" title="{{ (clue.confidence * 100)|round(0) }}%">
+              <div class="progress-fill" style="width:{{ (clue.confidence * 100)|round(0) }}%"></div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% else %}
+  <p class="empty">No clues recorded.</p>
+  {% endfor %}
+</section>
+{% endblock %}

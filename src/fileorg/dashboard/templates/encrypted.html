@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Encrypted Volumes{% endblock %}
+{% block content %}
+<h1>Encrypted Volumes</h1>
+<table>
+  <thead>
+    <tr><th>File</th><th>Type</th><th>Key Found</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    {% for v in volumes %}
+    <tr>
+      <td>
+        <a href="/files/{{ v.file_id }}">{{ v.path.split('/')[-1] }}</a><br>
+        <small class="muted">{{ v.path }}</small>
+      </td>
+      <td><code>{{ v.volume_type }}</code></td>
+      <td>
+        {% if v.key_discovered %}
+        <span class="badge badge-green">Yes</span>
+        {% else %}
+        <span class="badge badge-red">No</span>
+        {% endif %}
+      </td>
+      <td>{{ v.notes or '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">No encrypted volumes detected.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+
+{% if stats.last_scan %}
+<section class="scan-status">
+  <div class="scan-meta">
+    <strong>Last scan:</strong> {{ stats.last_scan.source_dir }}
+    <span class="badge badge-{{ 'green' if stats.last_scan.status == 'completed' else ('yellow' if stats.last_scan.status == 'running' else 'red') }}">
+      {{ stats.last_scan.status }}
+    </span>
+    <span class="scan-time">{{ stats.last_scan.started_at[:19].replace('T',' ') }}</span>
+  </div>
+  {% if stats.last_scan.status == 'running' %}
+  <div id="scan-progress" hx-get="/api/status" hx-trigger="every 2s" hx-swap="innerHTML">
+    <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
+    <span>Scanning...</span>
+  </div>
+  {% endif %}
+</section>
+{% else %}
+<section class="scan-status">
+  <p>No scans yet. Run <code>fileorg scan --source &lt;dir&gt;</code> to get started.</p>
+</section>
+{% endif %}
+
+<section class="stats-grid">
+  <div class="card">
+    <div class="card-value">{{ stats.total_files | default(0) }}</div>
+    <div class="card-label">Total Files</div>
+  </div>
+  <div class="card">
+    <div class="card-value">{{ stats.categorized_pct | default(0) }}%</div>
+    <div class="card-label">Categorized ({{ stats.categorized_count }})</div>
+  </div>
+  <div class="card">
+    <div class="card-value">{{ stats.category_count }}</div>
+    <div class="card-label">Categories</div>
+  </div>
+  <div class="card {% if stats.error_count > 0 %}card-warn{% endif %}">
+    <div class="card-value">{{ stats.error_count }}</div>
+    <div class="card-label">Errors</div>
+  </div>
+  <div class="card {% if stats.encrypted_count > 0 %}card-warn{% endif %}">
+    <div class="card-value"><a href="/encrypted">{{ stats.encrypted_count }}</a></div>
+    <div class="card-label">Encrypted</div>
+  </div>
+  <div class="card {% if stats.clueless_count > 0 %}card-warn{% endif %}">
+    <div class="card-value"><a href="/clueless">{{ stats.clueless_count }}</a></div>
+    <div class="card-label">Clueless</div>
+  </div>
+</section>
+
+<div class="two-col">
+  <section>
+    <h2>Top Categories</h2>
+    <ul class="category-list">
+      {% for cat in stats.top_categories %}
+      <li><a href="/categories/{{ cat.name }}">{{ cat.name }}</a> <span class="count">{{ cat.file_count }}</span></li>
+      {% else %}
+      <li class="empty">No categories yet.</li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Recently Categorized</h2>
+    <table>
+      <thead><tr><th>File</th><th>Category</th><th>Confidence</th></tr></thead>
+      <tbody>
+        {% for f in stats.recent_files %}
+        <tr>
+          <td class="path-cell" title="{{ f.path }}">{{ f.path.split('/')[-1] }}</td>
+          <td><a href="/categories/{{ f.category }}">{{ f.category }}</a></td>
+          <td>
+            <div class="progress" title="{{ (f.confidence * 100) | round(0) }}%">
+              <div class="progress-fill" style="width:{{ (f.confidence * 100) | round(0) }}%"></div>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="empty">No files categorized yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

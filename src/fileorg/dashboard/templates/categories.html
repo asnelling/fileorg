@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Categories{% endblock %}
+{% block content %}
+<h1>Categories</h1>
+
+{% if filtered_category %}
+<p><a href="/categories">&larr; All categories</a> &nbsp; Showing: <strong>{{ filtered_category }}</strong></p>
+{% if files %}
+<table>
+  <thead><tr><th>File</th><th>Size</th><th>MIME</th></tr></thead>
+  <tbody>
+    {% for f in files %}
+    <tr>
+      <td><a href="/files/{{ f.id }}">{{ f.path.split('/')[-1] }}</a><br><small class="muted">{{ f.path }}</small></td>
+      <td class="num">{{ f.size_bytes }}</td>
+      <td>{{ f.mime_type or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No files in this category.</p>
+{% endif %}
+{% else %}
+<table>
+  <thead><tr><th>Category</th><th>Files</th><th>Total Size</th></tr></thead>
+  <tbody>
+    {% for cat in categories %}
+    <tr>
+      <td><a href="/categories/{{ cat.name }}">{{ cat.name }}</a></td>
+      <td class="num">{{ cat.file_count }}</td>
+      <td class="num">{{ cat.total_size }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3" class="empty">No categories yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

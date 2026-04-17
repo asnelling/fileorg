@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Files{% endblock %}
+{% block content %}
+<h1>Files <small class="muted">({{ total }} total)</small></h1>
+
+<form method="get" action="/files" class="filter-bar">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search path or clues...">
+  <select name="status">
+    <option value="">All statuses</option>
+    {% for s in ['pending','clued','categorized','error'] %}
+    <option value="{{ s }}" {% if status == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="category" value="{{ category }}" placeholder="Category filter...">
+  <select name="sort">
+    <option value="size_desc" {% if sort=='size_desc' %}selected{% endif %}>Size (largest first)</option>
+    <option value="size_asc" {% if sort=='size_asc' %}selected{% endif %}>Size (smallest first)</option>
+    <option value="path_asc" {% if sort=='path_asc' %}selected{% endif %}>Path (A-Z)</option>
+    <option value="confidence_desc" {% if sort=='confidence_desc' %}selected{% endif %}>Confidence (highest first)</option>
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+<table>
+  <thead>
+    <tr><th>File</th><th>Category</th><th>Confidence</th><th>Size</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    {% for f in files %}
+    <tr>
+      <td>
+        <a href="/files/{{ f.id }}">{{ f.path.split('/')[-1] }}</a><br>
+        <small class="muted">{{ f.path }}</small>
+      </td>
+      <td>
+        {% if f.category_name %}<a href="/categories/{{ f.category_name }}">{{ f.category_name }}</a>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td>
+        {% if f.cat_confidence %}
+        <div class="progress" title="{{ (f.cat_confidence * 100)|round(0) }}%">
+          <div class="progress-fill" style="width:{{ (f.cat_confidence * 100)|round(0) }}%"></div>
+        </div>
+        {% else %}—{% endif %}
+      </td>
+      <td class="num">{{ f.size_bytes }}</td>
+      <td><span class="badge badge-{{ 'green' if f.scan_status=='categorized' else ('red' if f.scan_status=='error' else 'gray') }}">{{ f.scan_status }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="empty">No files found.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination">
+  {% if page > 1 %}<a href="/files?page={{ page-1 }}&q={{ q }}&status={{ status }}&category={{ category }}&sort={{ sort }}">&laquo; Prev</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="/files?page={{ page+1 }}&q={{ q }}&status={{ status }}&category={{ category }}&sort={{ sort }}">Next &raquo;</a>{% endif %}
+</div>
+{% endblock %}

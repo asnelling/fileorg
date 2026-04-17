@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>fileorg — {% block title %}Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  <nav>
+    <a href="/" class="brand">fileorg</a>
+    <a href="/">Overview</a>
+    <a href="/categories">Categories</a>
+    <a href="/files">Files</a>
+    <a href="/encrypted">Encrypted</a>
+    <a href="/clueless">Clueless</a>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

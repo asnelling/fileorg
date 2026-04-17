@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Clueless Files{% endblock %}
+{% block content %}
+<h1>Clueless Files</h1>
+<p class="muted">Files with low plugin coverage (coverage score &lt; 0.35) — these may benefit from additional plugins or manual review.</p>
+<table>
+  <thead>
+    <tr><th>File</th><th>MIME</th><th>Plugins</th><th>Coverage</th></tr>
+  </thead>
+  <tbody>
+    {% for f in files %}
+    <tr>
+      <td>
+        <a href="/files/{{ f.file_id }}">{{ f.path.split('/')[-1] }}</a><br>
+        <small class="muted">{{ f.path }}</small>
+      </td>
+      <td>{{ f.mime_type or '—' }}</td>
+      <td class="num">{{ f.plugin_count }}</td>
+      <td>
+        <div class="progress" title="{{ (f.coverage_score * 100)|round(0) }}%">
+          <div class="progress-fill progress-warn" style="width:{{ (f.coverage_score * 100)|round(0) }}%"></div>
+        </div>
+        <small>{{ (f.coverage_score * 100)|round(1) }}%</small>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">No clueless files — great coverage!</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
