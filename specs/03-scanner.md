@@ -213,9 +213,154 @@ On `--no-resume`:
 
 Single-threaded by design. The pipeline loop is sequential. The dashboard can read the DB concurrently due to WAL mode — no locking needed.
 
+The keyboard controller (see below) runs its stdin reader in a daemon thread, but all state mutations it triggers happen on the main thread via `poll()`. No shared mutable state is accessed from both threads simultaneously.
+
 ## Progress Reporting
 
 The `progress_callback` receives a `ScanProgress` after every committed file. The CLI uses this to update a Rich progress bar. The dashboard's `/api/status` endpoint reads `scan_runs` directly from the DB (the latest `running` run's `processed` / `total_files` columns).
+
+## Interactive Keyboard Control
+
+### `src/fileorg/scanner/keyboard.py`
+
+While a scan is running, the user can press single keys to control pipeline behaviour without pressing Enter. This is implemented by a background thread that reads stdin in `cbreak` mode and enqueues keystrokes for the main pipeline thread to dispatch.
+
+#### Design principles
+
+- **Command registry**: commands are registered as `key → (description, handler)` before the scan starts. Adding a new command requires only one `register()` call — no changes to the dispatch loop.
+- **Main-thread dispatch**: handlers are called from the main pipeline thread via `poll()`, never from the reader thread. This avoids all threading concerns around shared state.
+- **TTY guard**: if stdin is not a TTY (piped input, CI), `start()` is a no-op. `poll()` always works and simply finds nothing.
+- **Clean teardown**: the reader thread is a daemon and exits automatically when the process ends. `stop()` signals it to exit early (e.g. when the scan completes).
+
+#### Interface
+
+```python
+from collections.abc import Callable
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class KeyCommand:
+    key: str
+    description: str   # shown in the help line (e.g. "skip file")
+    handler: Callable[[], None]
+
+
+class KeyboardController:
+    def register(self, key: str, description: str, handler: Callable[[], None]) -> None:
+        """Register a single-character command. Overwrites any existing binding for key."""
+        ...
+
+    def commands(self) -> list[KeyCommand]:
+        """Return registered commands in registration order (for display)."""
+        ...
+
+    def start(self) -> None:
+        """
+        Start the background stdin reader thread.
+        No-op if stdin is not a TTY.
+        Sets terminal to cbreak mode so each keypress is read immediately.
+        Restores original terminal settings on stop() or process exit.
+        """
+        ...
+
+    def stop(self) -> None:
+        """Signal the reader thread to exit and restore terminal settings."""
+        ...
+
+    def poll(self) -> None:
+        """
+        Dispatch all pending keystrokes by calling their registered handlers.
+        Must be called from the main thread.
+        Unknown keys are silently ignored.
+        """
+        ...
+```
+
+#### Implementation notes
+
+- Use `termios` + `tty.setcbreak(fd)` to read characters without waiting for Enter
+- Use `select.select([sys.stdin], [], [], 0.1)` inside the reader loop to avoid a tight spin and allow the `_running` flag to be checked every 100 ms
+- Store keystrokes in a `queue.SimpleQueue[str]` — `put()` from the reader thread, `get_nowait()` in `poll()` on the main thread
+- Save and restore the original `termios` settings in a `finally` block so the terminal is not left in cbreak mode if the scan crashes
+
+### Built-in keyboard commands
+
+| Key | Action |
+|-----|--------|
+| `f` | Skip the current file: mark it `pending` in the DB (so it is retried on next resume) and continue to the next file |
+| `d` | Skip the current directory: add `path.parent` to a `skip_dirs` set; all subsequent files whose path starts with that directory are skipped |
+| `?` | Print registered commands to the console without interrupting the progress display |
+
+### Pipeline integration
+
+In `run_scan()`:
+
+```python
+skip_dirs: set[Path] = set()
+_skip_file = [False]   # mutable container so closures can write to it
+current_dir: Path = source_dir
+
+kb = KeyboardController()
+kb.register('f', 'skip file',      lambda: _skip_file.__setitem__(0, True))
+kb.register('d', 'skip directory', lambda: skip_dirs.add(current_dir))
+kb.register('?', 'show commands',  lambda: _print_commands(kb, console))
+kb.start()
+```
+
+`run_scan()` signature gains a `keyboard_controller: KeyboardController | None = None` parameter so callers (tests, API consumers) can inject a custom or no-op controller. When `None`, a default `KeyboardController` is instantiated internally.
+
+**Per-file loop changes:**
+
+```python
+for path in walk(source_dir, ...):
+    current_dir = path.parent
+    _skip_file[0] = False
+    kb.poll()                              # dispatch any queued keys
+
+    # Skip directory check
+    if any(path.is_relative_to(d) for d in skip_dirs):
+        continue
+
+    # ... Stage 2 (Hash) ...
+
+    kb.poll()
+    if _skip_file[0]:
+        queries.update_file_status(conn, file_id, 'pending')
+        conn.commit()
+        continue
+
+    # ... Stage 3 (MIME) ...
+
+    kb.poll()
+    if _skip_file[0]:
+        queries.update_file_status(conn, file_id, 'pending')
+        conn.commit()
+        continue
+
+    # ... Stages 4, 4.5, 5 each preceded by kb.poll() + skip check ...
+```
+
+`kb.poll()` is called before each expensive stage so `f` takes effect as soon as the current stage finishes, not only between files.
+
+**After the file loop:**
+
+```python
+kb.stop()
+```
+
+### CLI display
+
+The Rich progress bar description includes a static hint line showing registered commands:
+
+```
+[cyan]photo_001.jpg[/cyan]  [dim]f=skip file  d=skip dir  ?=help[/dim]
+```
+
+### Skipped file behaviour
+
+- **`f` (skip file)**: file is left as `pending` in the DB. On the next `--resume` run it will be processed normally. A counter of skipped files is shown in the post-scan summary.
+- **`d` (skip directory)**: files in that directory are silently bypassed (no DB record created if they have not been seen before; already-seen files are left at their current status). The directory path is logged to the console at INFO level.
 
 ## Testing
 
@@ -225,3 +370,11 @@ The `progress_callback` receives a `ScanProgress` after every committed file. Th
 - Run again — verify resume skips already-categorized files
 - Verify `scan_runs` row has correct counts and status
 - Test that a plugin error on one file does not abort the scan (check `error_message` set)
+
+`tests/test_keyboard.py`:
+- Test `poll()` calls registered handler when a key is in the queue
+- Test unknown keys are silently ignored
+- Test `commands()` returns commands in registration order
+- Test `start()` is a no-op when stdin is not a TTY (patch `sys.stdin.isatty`)
+- Test `stop()` sets `_running = False` (reader thread exits within 200 ms)
+- Integration: inject a pre-populated `KeyboardController` into `run_scan()` to simulate `f` and `d` keypresses and verify files/directories are skipped correctly

@@ -42,6 +42,14 @@ def scan(
     db.parent.mkdir(parents=True, exist_ok=True)
     start = time.time()
 
+    from fileorg.scanner.keyboard import KeyboardController
+
+    kb = KeyboardController()
+    # commands are registered inside run_scan; we pass the controller so
+    # the CLI can read kb.commands() for the hint line after start()
+    # We pre-register here so the hint renders before the first file
+    _hint = "[dim]f=skip file  d=skip dir  ?=help[/dim]"
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -49,11 +57,20 @@ def scan(
         TaskProgressColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Scanning...", total=None)
+        task = progress.add_task(f"Scanning...  {_hint}", total=None)
 
         def on_progress(p: ScanProgress) -> None:
-            progress.update(task, total=p.total or 1, completed=p.processed,
-                            description=f"[cyan]{Path(p.current_file).name[:40]}[/cyan]")
+            skips = ""
+            if p.skipped_files:
+                skips += f"  [yellow]{p.skipped_files}f skipped[/yellow]"
+            if p.skipped_dirs:
+                skips += f"  [yellow]{p.skipped_dirs}d skipped[/yellow]"
+            progress.update(
+                task,
+                total=p.total or 1,
+                completed=p.processed,
+                description=f"[cyan]{Path(p.current_file).name[:35]}[/cyan]{skips}  {_hint}",
+            )
 
         result = run_scan(
             source_dir=source,
@@ -64,6 +81,7 @@ def scan(
             dry_run=dry_run,
             follow_symlinks=follow_symlinks,
             progress_callback=on_progress,
+            keyboard_controller=kb,
         )
 
     elapsed = time.time() - start
@@ -81,6 +99,10 @@ def scan(
     table.add_row("Errors", str(stats["error_count"]))
     table.add_row("Categories found", str(stats["category_count"]))
     table.add_row("Clueless flagged", str(stats["clueless_count"]))
+    if result.skipped_files:
+        table.add_row("Files skipped (f)", str(result.skipped_files))
+    if result.skipped_dirs:
+        table.add_row("Dirs skipped (d)", str(result.skipped_dirs))
     console.print(table)
 
 

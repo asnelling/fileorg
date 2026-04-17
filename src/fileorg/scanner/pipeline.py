@@ -10,6 +10,7 @@ from fileorg.db import queries
 from fileorg.plugins.clueless import CluelessPlugin
 from fileorg.plugins.registry import build_default_registry
 from fileorg.scanner.hasher import sha256_file
+from fileorg.scanner.keyboard import KeyboardController
 from fileorg.scanner.walker import walk
 
 
@@ -28,6 +29,8 @@ class ScanProgress:
     processed: int
     current_file: str
     status: str
+    skipped_files: int = 0
+    skipped_dirs: int = 0
 
 
 def run_scan(
@@ -39,6 +42,7 @@ def run_scan(
     dry_run: bool = False,
     follow_symlinks: bool = False,
     progress_callback: Callable[[ScanProgress], None] | None = None,
+    keyboard_controller: KeyboardController | None = None,
 ) -> ScanProgress:
     conn = get_connection(db_path)
     run_id = queries.create_scan_run(conn, str(source_dir))
@@ -58,90 +62,166 @@ def run_scan(
         from fileorg.scanner.categorizer import OllamaCategorizer
         categorizer = OllamaCategorizer(model=model)
 
-    processed = 0
-    for path in walk(source_dir, follow_symlinks, skip_path=db_path):
-        current_file = str(path)
-        try:
-            stat = path.stat()
-            sha256 = sha256_file(path)
+    # ── keyboard state ────────────────────────────────────────────────────────
+    skip_dirs: set[Path] = set()
+    skip_dirs_count: list[int] = [0]
+    _skip_file: list[bool] = [False]
+    current_dir: list[Path] = [source_dir]
 
-            if resume and known.get(sha256) == "categorized":
-                queries.upsert_file(conn, sha256, str(path), run_id, stat.st_size)
-                conn.commit()
-                processed += 1
-                if progress_callback:
-                    progress_callback(ScanProgress(run_id, total, processed, current_file, "running"))
+    kb = keyboard_controller if keyboard_controller is not None else KeyboardController()
+
+    def _do_skip_file() -> None:
+        _skip_file[0] = True
+
+    def _do_skip_dir() -> None:
+        d = current_dir[0]
+        if d not in skip_dirs:
+            skip_dirs.add(d)
+            skip_dirs_count[0] += 1
+
+    def _do_show_help() -> None:
+        parts = [f"[bold]{cmd.key}[/bold]={cmd.description}" for cmd in kb.commands()]
+        from rich.console import Console
+        Console().print("  " + "  ".join(parts))
+
+    kb.register("f", "skip file", _do_skip_file)
+    kb.register("d", "skip dir", _do_skip_dir)
+    kb.register("?", "show commands", _do_show_help)
+    kb.start()
+    # ─────────────────────────────────────────────────────────────────────────
+
+    processed = 0
+    skipped_files = 0
+
+    try:
+        for path in walk(source_dir, follow_symlinks, skip_path=db_path):
+            current_file = str(path)
+            current_dir[0] = path.parent
+            _skip_file[0] = False
+            kb.poll()
+
+            # directory skip check
+            if any(path.is_relative_to(d) for d in skip_dirs):
                 continue
 
-            file_id = queries.upsert_file(conn, sha256, str(path), run_id, stat.st_size)
-
-            prior_status = known.get(sha256, "new")
-
-            if prior_status not in ("clued",):
-                mime_type = _detect_mime(path)
-                queries.update_file_mime(conn, file_id, mime_type or "")
-                queries.update_file_status(conn, file_id, "pending")
-
-                for plugin in registry.all():
-                    if plugin.accepts(path, mime_type):
-                        clues = list(plugin.extract(path))
-                        encrypted_type = next(
-                            (c.value for c in clues if c.key == "_encrypted_volume_type"), None
-                        )
-                        clues = [c for c in clues if c.key != "_encrypted_volume_type"]
-                        if encrypted_type:
-                            queries.upsert_encrypted_volume(conn, file_id, encrypted_type)
-                        queries.insert_clues(conn, file_id, plugin.name, [
-                            {"key": c.key, "value": c.value, "confidence": c.confidence}
-                            for c in clues
-                        ])
-
-                queries.update_file_status(conn, file_id, "clued")
-            else:
-                mime_row = conn.execute("SELECT mime_type FROM files WHERE id=?", (file_id,)).fetchone()
-                mime_type = mime_row["mime_type"] if mime_row else None
-
-            all_clues = queries.get_clues_for_file(conn, file_id)
-            score, flagged, extra_clues = clueless_plugin.compute(file_id, all_clues, mime_type)
-            queries.upsert_coverage(
-                conn, file_id,
-                plugin_count=len({r["plugin_name"] for r in all_clues if r["plugin_name"] != "clueless"}),
-                total_confidence=sum(r["confidence"] for r in all_clues if r["plugin_name"] != "clueless"),
-                clue_count=len([r for r in all_clues if r["plugin_name"] != "clueless"]),
-                coverage_score=score,
-                flagged=flagged,
-            )
-            queries.insert_clues(conn, file_id, "clueless", [
-                {"key": c.key, "value": c.value, "confidence": c.confidence}
-                for c in extra_clues
-            ])
-
-            if not dry_run and categorizer is not None:
-                all_clues_for_ai = queries.get_clues_for_file(conn, file_id)
-                result = categorizer.categorize(path, mime_type, list(all_clues_for_ai))
-                category_id = queries.get_or_create_category(conn, result["category"])
-                queries.upsert_file_category(conn, file_id, category_id, result["confidence"], model)
-                queries.update_file_status(conn, file_id, "categorized")
-            elif dry_run:
-                queries.update_file_status(conn, file_id, "categorized")
-
-        except Exception as e:
+            file_id: int | None = None
             try:
-                file_id_for_err = conn.execute(
-                    "SELECT id FROM files WHERE path=?", (current_file,)
-                ).fetchone()
-                if file_id_for_err:
-                    queries.update_file_status(conn, file_id_for_err["id"], "error", str(e)[:500])
-            except Exception:
-                pass
+                stat = path.stat()
+                sha256 = sha256_file(path)
 
-        conn.commit()
-        processed += 1
-        if progress_callback:
-            progress_callback(ScanProgress(run_id, total, processed, current_file, "running"))
+                if resume and known.get(sha256) == "categorized":
+                    queries.upsert_file(conn, sha256, str(path), run_id, stat.st_size)
+                    conn.commit()
+                    processed += 1
+                    if progress_callback:
+                        progress_callback(ScanProgress(run_id, total, processed, current_file, "running", skipped_files, skip_dirs_count[0]))
+                    continue
+
+                file_id = queries.upsert_file(conn, sha256, str(path), run_id, stat.st_size)
+                prior_status = known.get(sha256, "new")
+
+                # Stage 3 + 4 — MIME and plugins
+                kb.poll()
+                if _skip_file[0]:
+                    queries.update_file_status(conn, file_id, "pending")
+                    conn.commit()
+                    skipped_files += 1
+                    continue
+
+                if prior_status not in ("clued",):
+                    mime_type = _detect_mime(path)
+                    queries.update_file_mime(conn, file_id, mime_type or "")
+                    queries.update_file_status(conn, file_id, "pending")
+
+                    for plugin in registry.all():
+                        kb.poll()
+                        if _skip_file[0]:
+                            break
+                        if plugin.accepts(path, mime_type):
+                            clues = list(plugin.extract(path))
+                            encrypted_type = next(
+                                (c.value for c in clues if c.key == "_encrypted_volume_type"), None
+                            )
+                            clues = [c for c in clues if c.key != "_encrypted_volume_type"]
+                            if encrypted_type:
+                                queries.upsert_encrypted_volume(conn, file_id, encrypted_type)
+                            queries.insert_clues(conn, file_id, plugin.name, [
+                                {"key": c.key, "value": c.value, "confidence": c.confidence}
+                                for c in clues
+                            ])
+
+                    if _skip_file[0]:
+                        queries.update_file_status(conn, file_id, "pending")
+                        conn.commit()
+                        skipped_files += 1
+                        continue
+
+                    queries.update_file_status(conn, file_id, "clued")
+                else:
+                    mime_row = conn.execute("SELECT mime_type FROM files WHERE id=?", (file_id,)).fetchone()
+                    mime_type = mime_row["mime_type"] if mime_row else None
+
+                # Stage 4.5 — coverage
+                kb.poll()
+                if _skip_file[0]:
+                    queries.update_file_status(conn, file_id, "pending")
+                    conn.commit()
+                    skipped_files += 1
+                    continue
+
+                all_clues = queries.get_clues_for_file(conn, file_id)
+                score, flagged, extra_clues = clueless_plugin.compute(file_id, all_clues, mime_type)
+                queries.upsert_coverage(
+                    conn, file_id,
+                    plugin_count=len({r["plugin_name"] for r in all_clues if r["plugin_name"] != "clueless"}),
+                    total_confidence=sum(r["confidence"] for r in all_clues if r["plugin_name"] != "clueless"),
+                    clue_count=len([r for r in all_clues if r["plugin_name"] != "clueless"]),
+                    coverage_score=score,
+                    flagged=flagged,
+                )
+                queries.insert_clues(conn, file_id, "clueless", [
+                    {"key": c.key, "value": c.value, "confidence": c.confidence}
+                    for c in extra_clues
+                ])
+
+                # Stage 5 — AI
+                kb.poll()
+                if _skip_file[0]:
+                    queries.update_file_status(conn, file_id, "pending")
+                    conn.commit()
+                    skipped_files += 1
+                    continue
+
+                if not dry_run and categorizer is not None:
+                    all_clues_for_ai = queries.get_clues_for_file(conn, file_id)
+                    result = categorizer.categorize(path, mime_type, list(all_clues_for_ai))
+                    category_id = queries.get_or_create_category(conn, result["category"])
+                    queries.upsert_file_category(conn, file_id, category_id, result["confidence"], model)
+                    queries.update_file_status(conn, file_id, "categorized")
+                elif dry_run:
+                    queries.update_file_status(conn, file_id, "categorized")
+
+            except Exception as e:
+                try:
+                    if file_id is not None:
+                        queries.update_file_status(conn, file_id, "error", str(e)[:500])
+                    else:
+                        frow = conn.execute("SELECT id FROM files WHERE path=?", (current_file,)).fetchone()
+                        if frow:
+                            queries.update_file_status(conn, frow["id"], "error", str(e)[:500])
+                except Exception:
+                    pass
+
+            conn.commit()
+            processed += 1
+            if progress_callback:
+                progress_callback(ScanProgress(run_id, total, processed, current_file, "running", skipped_files, skip_dirs_count[0]))
+
+    finally:
+        kb.stop()
 
     queries.finish_scan_run(conn, run_id, "completed", processed)
     conn.commit()
     conn.close()
 
-    return ScanProgress(run_id, total, processed, "", "completed")
+    return ScanProgress(run_id, total, processed, "", "completed", skipped_files, skip_dirs_count[0])
