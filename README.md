@@ -41,7 +41,40 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+After installing, run `fileorg check` to confirm all dependencies are present and Ollama is reachable:
+
+```bash
+fileorg check
+```
+
+```
+                      fileorg dependency check
+┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Dependency            ┃ Status        ┃ Version / Detail          ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Python                │ ok            │ 3.13.7                    │
+│ ollama (package)      │ ok            │ 0.6.1                     │
+│ Ollama daemon         │ ok            │ running                   │
+│ Ollama models         │ ok            │ llama3.2:latest (2.0 GB)  │
+│ python-magic          │ ok            │ 0.4.27                    │
+│ libmagic (system)     │ ok            │ available                 │
+│ Pillow                │ ok            │ 12.2.0                    │
+│ piexif                │ ok            │ 1.1.3                     │
+│ pytesseract (package) │ ok            │ 0.3.13                    │
+│ tesseract (binary)    │ ok            │ 5.3.4                     │
+│ py7zr                 │ ok            │ 1.1.0                     │
+└───────────────────────┴───────────────┴───────────────────────────┘
+```
+
+`check` exits 0 when all pip packages and system libraries are present. The Ollama daemon and models show as yellow warnings if unavailable but do not affect the exit code — scans still work with `--dry-run` without them.
+
 ## Usage
+
+### Verify dependencies
+
+```bash
+fileorg check
+```
 
 ### Scan a directory
 
@@ -95,6 +128,12 @@ fileorg export --dest ./out --format csv
 
 # Filter to one category subtree
 fileorg export --dest ./out --category "Photography/Travel"
+```
+
+### Check dependencies
+
+```bash
+fileorg check
 ```
 
 ### List plugins
