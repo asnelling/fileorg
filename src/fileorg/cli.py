@@ -154,6 +154,125 @@ def export(
     console.print(f"[green]Done:[/green] {out}")
 
 
+@app.command()
+def check() -> None:
+    """Check local dependencies and report their versions."""
+    import importlib.metadata
+    import sys
+    from rich.text import Text
+
+    table = Table(title="fileorg dependency check")
+    table.add_column("Dependency", style="bold")
+    table.add_column("Status")
+    table.add_column("Version / Detail")
+
+    all_ok = True
+
+    def _badge(status: str) -> Text:
+        colours = {"ok": "green", "not installed": "red", "not running": "yellow", "no models": "yellow"}
+        return Text(status, style=f"bold {colours.get(status, 'white')}")
+
+    def _pkg(name: str, display: str | None = None) -> tuple[str, str]:
+        try:
+            v = importlib.metadata.version(name)
+            return "ok", v
+        except importlib.metadata.PackageNotFoundError:
+            return "not installed", ""
+
+    # Python
+    table.add_row("Python", _badge("ok"), sys.version.split()[0])
+
+    # ollama package
+    status, ver = _pkg("ollama")
+    if status != "ok":
+        all_ok = False
+    table.add_row("ollama (package)", _badge(status), ver or "pip install ollama")
+
+    # Ollama daemon + models
+    daemon_status, daemon_detail, model_lines = "not running", "https://ollama.com", []
+    try:
+        import ollama as _ol
+        result = _ol.list()
+        models = result.get("models", [])
+        if models:
+            daemon_status = "ok"
+            daemon_detail = "running"
+            for m in models:
+                name = m.get("model") or m.get("name", "?")
+                size_gb = m.get("size", 0) / 1_073_741_824
+                model_lines.append(f"{name} ({size_gb:.1f} GB)")
+        else:
+            daemon_status = "no models"
+            daemon_detail = "run: ollama pull llama3.2"
+    except Exception:
+        pass
+
+    table.add_row("Ollama daemon", _badge(daemon_status), daemon_detail)
+
+    if model_lines:
+        first, *rest = model_lines
+        table.add_row("Ollama models", _badge("ok"), first)
+        for line in rest:
+            table.add_row("", Text(""), line)
+    elif daemon_status == "no models":
+        table.add_row("Ollama models", _badge("no models"), "run: ollama pull llama3.2")
+    else:
+        table.add_row("Ollama models", _badge("not running"), "—")
+
+    # python-magic package
+    status, ver = _pkg("python-magic")
+    if status != "ok":
+        all_ok = False
+    table.add_row("python-magic", _badge(status), ver or "pip install python-magic")
+
+    # libmagic system library
+    try:
+        import magic as _magic
+        _magic.Magic()
+        table.add_row("libmagic (system)", _badge("ok"), "available")
+    except Exception:
+        all_ok = False
+        table.add_row("libmagic (system)", _badge("not installed"), "apt install libmagic1")
+
+    # Pillow
+    status, ver = _pkg("Pillow")
+    if status != "ok":
+        all_ok = False
+    table.add_row("Pillow", _badge(status), ver or "pip install Pillow")
+
+    # piexif
+    status, ver = _pkg("piexif")
+    if status != "ok":
+        all_ok = False
+    table.add_row("piexif", _badge(status), ver or "pip install piexif")
+
+    # pytesseract package
+    status, ver = _pkg("pytesseract")
+    if status != "ok":
+        all_ok = False
+    table.add_row("pytesseract (package)", _badge(status), ver or "pip install pytesseract")
+
+    # tesseract binary
+    try:
+        import pytesseract as _tess
+        tess_ver = str(_tess.get_tesseract_version())
+        table.add_row("tesseract (binary)", _badge("ok"), tess_ver)
+    except Exception:
+        all_ok = False
+        table.add_row("tesseract (binary)", _badge("not installed"), "apt install tesseract-ocr")
+
+    # py7zr
+    status, ver = _pkg("py7zr")
+    if status != "ok":
+        all_ok = False
+    table.add_row("py7zr", _badge(status), ver or "pip install py7zr")
+
+    console.print(table)
+
+    if not all_ok:
+        raise typer.Exit(1)
+
+
 plugins_app = typer.Typer(help="Plugin management commands")
 app.add_typer(plugins_app, name="plugins")
 
