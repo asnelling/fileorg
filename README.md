@@ -95,6 +95,16 @@ Options:
 | `--dry-run` | `false` | Skip AI categorization |
 | `--follow-symlinks` | `false` | Follow symbolic links |
 
+While a scan is running you can press single keys to control it:
+
+| Key | Effect |
+|-----|--------|
+| `f` | Skip the current file — leaves it as `pending` so the next `--resume` run retries it |
+| `d` | Skip the current directory — all remaining files under that directory are bypassed |
+| `?` | Print available commands without interrupting the progress display |
+
+Skipped file and directory counts appear in the progress bar and are reported in the post-scan summary. Skipped files are left in a resumable state, so running `fileorg scan` again will pick them up.
+
 ### View the dashboard
 
 ```bash
@@ -128,12 +138,6 @@ fileorg export --dest ./out --format csv
 
 # Filter to one category subtree
 fileorg export --dest ./out --category "Photography/Travel"
-```
-
-### Check dependencies
-
-```bash
-fileorg check
 ```
 
 ### List plugins
